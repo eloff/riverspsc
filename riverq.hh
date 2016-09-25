@@ -40,8 +40,8 @@ namespace riverq {
 	}
 
 	struct spsct;
-	extern "C" std::atomic<u64>* publish(spsct* q, std::atomic<u64>* producer);
-	extern "C" std::atomic<u64>* advance(spsct* q, std::atomic<u64>* consumer);
+	extern "C" std::atomic<u64>* publish(std::atomic<u64>* producer, spsct* q);
+	extern "C" std::atomic<u64>* advance(std::atomic<u64>* consumer, spsct* q);
 
 	struct spsct {
 		std::atomic<u64>* const queue;
@@ -56,7 +56,7 @@ namespace riverq {
 
 		inline spsct(u64 size) : queue(alloc_queue(size)), end(queue+size), consumerStall(0), producerStall(0) {
 			published.store(queue, release);
-			consumed.store(end, release);
+			consumed.store(end-(PUB_MASK+1)/sizeof(u64), release);
 			// Touch all the pages
 			for (u64 i=0; i < size; i += 4096/sizeof(u64)) {
 				queue[i].store(0, relaxed);
@@ -69,13 +69,13 @@ namespace riverq {
 		inline void push(std::atomic<u64>*& producer, u64 data) {
 			producer++->store(data, relaxed);
 			if (unlikely((u64(producer) & PUB_MASK) == 0)) {
-				producer = publish(this, producer);
+				producer = publish(producer, this);
 			}
 		}
 
 		inline u64 pop(std::atomic<u64>*& consumer) {
 			if (unlikely((u64(consumer) & PUB_MASK) == 0)) {
-				consumer = advance(this, consumer);
+				consumer = advance(consumer, this);
 			}
 			return consumer++->load(relaxed);
 		}
@@ -95,7 +95,7 @@ namespace riverq {
 		u64 producerWrapped;
 
 		inline spscl(u64 size) : queue(alloc_queue(size+(4096/sizeof(u64))*2)+4096/sizeof(u64)), end(queue+size), consumerStall(0), producerStall(0) {
-			//::memset(queue, 0, size*sizeof(u64));
+			::memset(queue, 0, size*sizeof(u64));
 			queue[size].store(1, relaxed);
 		}
 
@@ -116,7 +116,7 @@ namespace riverq {
 				consumer = wait_for_producer(this, consumer);
 				val = consumer->load(relaxed);
 			}
-			consumer[-16].store(0, relaxed);
+			consumer[0].store(0, relaxed);
 			++consumer;
 			return val;
 		}
